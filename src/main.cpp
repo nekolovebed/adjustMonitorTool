@@ -43,9 +43,8 @@ static const UINT TIMER_POLL = 1;
 static const UINT TIMER_FLUSH = 2;
 static const UINT TIMER_OSD = 3;
 
-static const UINT HK_UP = 1;
-static const UINT HK_DOWN = 2;
-static const UINT HK_OSD = 3;
+static const UINT HK_COUNT = 3;
+static const UINT HK_ID_BASE = 1;
 
 static const float kWidth = 404.f;
 static const float kPad = 12.f;
@@ -53,13 +52,14 @@ static const float kRowH = 74.f;
 static const float kGap = 8.f;
 static const float kFooterH = 34.f;
 
-// 设置卡片内部坐标
 static const float kCardTop = 12.f;
-static const float kCardH = 276.f;
+static const float kCardH = 284.f;
 
-// 迷你调节条
+// 迷你调节条（还原 Win11 原生浮层形态）
 static const float kOsdW = 340.f;
-static const float kOsdH = 72.f;
+static const float kOsdH = 68.f;
+static const float kOsdRadius = 8.f;
+static const float kOsdRow = 34.f;
 
 static const D2D1_COLOR_F kText = {1.f, 1.f, 1.f, 0.94f};
 static const D2D1_COLOR_F kTextDim = {1.f, 1.f, 1.f, 0.55f};
@@ -68,50 +68,85 @@ static const D2D1_COLOR_F kRowBg = {1.f, 1.f, 1.f, 0.045f};
 static const D2D1_COLOR_F kRowHover = {1.f, 1.f, 1.f, 0.085f};
 static const D2D1_COLOR_F kRowBorder = {1.f, 1.f, 1.f, 0.07f};
 static const D2D1_COLOR_F kTrack = {1.f, 1.f, 1.f, 0.20f};
+static const D2D1_COLOR_F kTrackLight = {1.f, 1.f, 1.f, 0.50f};
 static const D2D1_COLOR_F kThumb = {1.f, 1.f, 1.f, 1.f};
 static const D2D1_COLOR_F kBgFallback = {0.086f, 0.086f, 0.094f, 1.f};
-static const D2D1_COLOR_F kPanel = {0.086f, 0.086f, 0.094f, 0.92f};
+static const D2D1_COLOR_F kOsdPanel = {0.173f, 0.176f, 0.180f, 0.97f};
 
 // ---------------------------------------------------------------------------
 // 设置
 // ---------------------------------------------------------------------------
+struct Hotkey {
+    UINT mods = MOD_CONTROL | MOD_ALT;
+    UINT vk = 0;
+    bool enabled = true;
+    bool ok = false;   // 注册是否成功
+};
+
 struct Settings {
-    bool hotkeys = true;
-    int osdPos = 1;   // 0 左上 1 上中 2 右上 3 左下 4 下中 5 右下
+    Hotkey hk[HK_COUNT];
+    int osdPos = 1;    // 0 左上 1 上中 2 右上 3 左下 4 下中 5 右下
+    int osdSel = -1;   // -1 全部显示器，否则为显示器序号
     bool autostart = false;
 };
 static Settings g_set;
+
+static void InitDefaults() {
+    g_set.hk[0].mods = MOD_CONTROL | MOD_ALT;
+    g_set.hk[0].vk = VK_UP;
+    g_set.hk[1].mods = MOD_CONTROL | MOD_ALT;
+    g_set.hk[1].vk = VK_DOWN;
+    g_set.hk[2].mods = MOD_CONTROL | MOD_ALT;
+    g_set.hk[2].vk = 'B';
+    for (UINT i = 0; i < HK_COUNT; ++i) g_set.hk[i].enabled = true;
+}
 
 static std::wstring SettingsDir() {
     wchar_t buf[MAX_PATH] = {};
     DWORD n = GetEnvironmentVariableW(L"APPDATA", buf, MAX_PATH);
     if (n == 0 || n >= MAX_PATH) return L".";
-    std::wstring dir = buf;
-    dir += L"\\Luma";
-    return dir;
+    return std::wstring(buf) + L"\\Luma";
 }
 
 static std::wstring SettingsFile() { return SettingsDir() + L"\\settings.ini"; }
 
 static void LoadSettings() {
+    InitDefaults();
     std::wstring f = SettingsFile();
-    g_set.hotkeys = GetPrivateProfileIntW(L"Luma", L"hotkeys", 1, f.c_str()) != 0;
+    for (UINT i = 0; i < HK_COUNT; ++i) {
+        wchar_t key[8];
+        swprintf(key, 8, L"hk%u", i + 1);
+        wchar_t buf[64] = {};
+        GetPrivateProfileStringW(L"Luma", key, L"", buf, 64, f.c_str());
+        int en = 1, mods = 0, vk = 0;
+        if (swscanf(buf, L"%d,%d,%d", &en, &mods, &vk) == 3 && vk != 0) {
+            g_set.hk[i].enabled = en != 0;
+            g_set.hk[i].mods = (UINT)mods;
+            g_set.hk[i].vk = (UINT)vk;
+        }
+    }
     int pos = GetPrivateProfileIntW(L"Luma", L"osdpos", 1, f.c_str());
     if (pos < 0 || pos > 5) pos = 1;
     g_set.osdPos = pos;
+    g_set.osdSel = GetPrivateProfileIntW(L"Luma", L"osdsel", -1, f.c_str());
 }
 
 static void SaveSettings() {
     CreateDirectoryW(SettingsDir().c_str(), nullptr);
     std::wstring f = SettingsFile();
+    for (UINT i = 0; i < HK_COUNT; ++i) {
+        wchar_t key[8], val[64];
+        swprintf(key, 8, L"hk%u", i + 1);
+        swprintf(val, 64, L"%d,%d,%d", g_set.hk[i].enabled ? 1 : 0, (int)g_set.hk[i].mods, (int)g_set.hk[i].vk);
+        WritePrivateProfileStringW(L"Luma", key, val, f.c_str());
+    }
     wchar_t v[8];
-    swprintf(v, 8, L"%d", g_set.hotkeys ? 1 : 0);
-    WritePrivateProfileStringW(L"Luma", L"hotkeys", v, f.c_str());
     swprintf(v, 8, L"%d", g_set.osdPos);
     WritePrivateProfileStringW(L"Luma", L"osdpos", v, f.c_str());
+    swprintf(v, 8, L"%d", g_set.osdSel);
+    WritePrivateProfileStringW(L"Luma", L"osdsel", v, f.c_str());
 }
 
-// 开机自启：HKCU\...\Run 下写一个 "Luma" 值
 static const wchar_t* kRunKey = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 
 static std::wstring ExePath() {
@@ -157,6 +192,7 @@ static float g_clientH = 202.f;
 static bool g_mica = false;
 static D2D1_COLOR_F g_accent = {0.30f, 0.76f, 1.f, 1.f};
 static bool g_settingsView = false;
+static int g_captureHk = -1;   // >=0 表示正在录入该序号的快捷键
 
 static ID3D11Device* g_d3d = nullptr;
 static ID3D11DeviceContext* g_d3dCtx = nullptr;
@@ -172,9 +208,9 @@ static IDWriteTextFormat* g_tfName = nullptr;
 static IDWriteTextFormat* g_tfPct = nullptr;
 static IDWriteTextFormat* g_tfSmall = nullptr;
 static IDWriteTextFormat* g_tfTiny = nullptr;
+static IDWriteTextFormat* g_tfBig = nullptr;
 static IDWriteInlineObject* g_ellipsis = nullptr;
 
-// 每个窗口一套合成表面
 struct Surface {
     IDXGISwapChain1* sc = nullptr;
     IDCompositionTarget* target = nullptr;
@@ -195,15 +231,14 @@ static int g_hoverRow = -1;
 static bool g_hoverSlider = false;
 static int g_dragRow = -1;
 static bool g_trackingLeave = false;
+static int g_hoverCtl = -1;   // 设置页：0..2 快捷键开关 3 自启 10..15 位置 20 返回 30..32 快捷键按钮
 
-// 设置页 hover
-static int g_hoverCtl = -1;   // 0 快捷键开关 1 自启开关 2..7 位置 8 返回
-
-// 迷你条状态
 static int g_osdPct = 50;
 static bool g_osdDrag = false;
+static bool g_osdList = false;
+static int g_osdHoverItem = -1;
+static bool g_osdChevronHover = false;
 static DWORD g_osdLastWrite = 0;
-static bool g_osdHover = false;
 
 static int g_pendingVal[16] = {};
 static bool g_pending[16] = {};
@@ -211,8 +246,6 @@ static DWORD g_lastWrite[16] = {};
 
 static NOTIFYICONDATAW g_nid = {};
 static bool g_trayAdded = false;
-
-static bool g_hkOk[3] = {false, false, false};
 
 // ---------------------------------------------------------------------------
 // 小工具
@@ -232,11 +265,89 @@ static D2D1_COLOR_F WithAlpha(D2D1_COLOR_F c, float a) {
     return c;
 }
 
+static std::wstring KeyName(UINT vk) {
+    switch (vk) {
+        case VK_UP: return L"↑";
+        case VK_DOWN: return L"↓";
+        case VK_LEFT: return L"←";
+        case VK_RIGHT: return L"→";
+        case VK_SPACE: return L"Space";
+        case VK_TAB: return L"Tab";
+        case VK_RETURN: return L"Enter";
+        case VK_HOME: return L"Home";
+        case VK_END: return L"End";
+        case VK_PRIOR: return L"PgUp";
+        case VK_NEXT: return L"PgDn";
+        case VK_INSERT: return L"Insert";
+        case VK_DELETE: return L"Delete";
+        case VK_OEM_PLUS: return L"=";
+        case VK_OEM_MINUS: return L"-";
+        case VK_OEM_COMMA: return L",";
+        case VK_OEM_PERIOD: return L".";
+        case VK_OEM_1: return L";";
+        case VK_OEM_2: return L"/";
+        case VK_OEM_3: return L"`";
+        case VK_OEM_4: return L"[";
+        case VK_OEM_5: return L"\\";
+        case VK_OEM_6: return L"]";
+        case VK_OEM_7: return L"'";
+        default: break;
+    }
+    if (vk >= 'A' && vk <= 'Z') return std::wstring(1, (wchar_t)vk);
+    if (vk >= '0' && vk <= '9') return std::wstring(1, (wchar_t)vk);
+    if (vk >= VK_F1 && vk <= VK_F24) return L"F" + std::to_wstring(vk - VK_F1 + 1);
+    wchar_t buf[32] = {};
+    UINT sc = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC) << 16;
+    if (GetKeyNameTextW((LONG)sc, buf, 32) > 0) return buf;
+    return L"?";
+}
+
+static std::wstring ComboText(const Hotkey& hk) {
+    std::wstring s;
+    if (hk.mods & MOD_CONTROL) s += L"Ctrl + ";
+    if (hk.mods & MOD_SHIFT) s += L"Shift + ";
+    if (hk.mods & MOD_ALT) s += L"Alt + ";
+    if (hk.mods & MOD_WIN) s += L"Win + ";
+    s += KeyName(hk.vk);
+    return s;
+}
+
 static float CalcClientHeight() {
     if (g_settingsView) return kCardTop + kCardH + 8.f + kFooterH;
     int n = (int)BrightList().size();
     if (n <= 0) return kPad + 84.f + kFooterH;
     return kPad + n * kRowH + (n - 1) * kGap + kFooterH;
+}
+
+// 列表里第一行是“全部显示器”（仅当有两块以上屏），其余为各显示器
+static int OsdRowCount() {
+    int n = (int)BrightList().size();
+    return n > 1 ? n + 1 : n;
+}
+
+static int OsdRowToSel(int row) {
+    int n = (int)BrightList().size();
+    if (n > 1) return row == 0 ? -1 : row - 1;
+    return row == 0 ? 0 : -1;
+}
+
+static int SelToRow(int sel) {
+    int n = (int)BrightList().size();
+    if (n > 1) return sel < 0 ? 0 : sel + 1;
+    return sel == 0 ? 0 : -1;
+}
+
+static const wchar_t* OsdRowName(int row) {
+    int n = (int)BrightList().size();
+    if (n > 1 && row == 0) return L"全部显示器";
+    int idx = (n > 1) ? row - 1 : row;
+    if (idx < 0 || idx >= n) return L"";
+    return BrightList()[idx].name.c_str();
+}
+
+static float OsdHeight() {
+    if (!g_osdList) return kOsdH;
+    return kOsdH + 6.f + OsdRowCount() * kOsdRow + 6.f;
 }
 
 static void LoadAccent() {
@@ -356,6 +467,7 @@ static bool CreateGraphics() {
     g_tfPct = MakeFormat(13.5f, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_TRAILING);
     g_tfSmall = MakeFormat(11.5f, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING);
     g_tfTiny = MakeFormat(11.f, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER);
+    g_tfBig = MakeFormat(20.f, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_TRAILING);
     if (g_tfName && g_writeFactory->CreateEllipsisTrimmingSign(g_tfName, &g_ellipsis) == S_OK && g_ellipsis) {
         DWRITE_TRIMMING trim = {DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
         g_tfName->SetTrimming(&trim, g_ellipsis);
@@ -456,35 +568,35 @@ static void UpdateWindowSize() {
     ComputeRows();
 }
 
-// 设置页控件位置（绝对客户区坐标）
 struct CfgLayout {
-    D2D1_RECT_F hkToggle;
+    D2D1_RECT_F hkToggle[3];
+    D2D1_RECT_F hkChip[3];
     D2D1_RECT_F autoToggle;
     D2D1_RECT_F pos[6];
-    D2D1_RECT_F chips[3];
     D2D1_RECT_F footerBtn;
 };
 
 static const wchar_t* kPosNames[6] = {L"左上", L"上中", L"右上", L"左下", L"下中", L"右下"};
+static const wchar_t* kHkNames[3] = {L"提高亮度", L"降低亮度", L"亮度调节条"};
 
-static CfgLayout LayoutSettings() {
+static CfgLayout LayoutCfg() {
     CfgLayout L;
-    L.hkToggle = {332.f, 24.f, 372.f, 44.f};
-    L.autoToggle = {332.f, 152.f, 372.f, 172.f};
-    L.chips[0] = {248.f, 51.f, 376.f, 73.f};
-    L.chips[1] = {248.f, 83.f, 376.f, 105.f};
-    L.chips[2] = {248.f, 115.f, 376.f, 137.f};
+    float ys[3] = {44.f, 78.f, 112.f};
+    for (int i = 0; i < 3; ++i) {
+        L.hkChip[i] = {156.f, ys[i] + 2.f, 300.f, ys[i] + 28.f};
+        L.hkToggle[i] = {332.f, ys[i] + 4.f, 372.f, ys[i] + 24.f};
+    }
+    L.autoToggle = {332.f, 158.f, 372.f, 178.f};
     float xs[3] = {26.f, 145.f, 264.f};
-    float ys[2] = {212.f, 246.f};
+    float gy[2] = {218.f, 252.f};
     for (int r = 0; r < 2; ++r)
-        for (int c = 0; c < 3; ++c) L.pos[r * 3 + c] = {xs[c], ys[r], xs[c] + 111.f, ys[r] + 30.f};
-    L.footerBtn = {kWidth - 12.f - 56.f, g_clientH - kFooterH + 3.f, kWidth - 12.f, g_clientH - 3.f};
+        for (int c = 0; c < 3; ++c) L.pos[r * 3 + c] = {xs[c], gy[r], xs[c] + 111.f, gy[r] + 30.f};
+    L.footerBtn = {kWidth - 68.f, g_clientH - kFooterH + 3.f, kWidth - 12.f, g_clientH - 3.f};
     return L;
 }
 
-// 迷你条上的滑块位置
-static float OsdX1() { return 52.f; }
-static float OsdX2() { return kOsdW - 66.f; }
+static float OsdX1() { return 58.f; }
+static float OsdX2() { return 266.f; }
 
 // ---------------------------------------------------------------------------
 // 绘制
@@ -520,22 +632,26 @@ static void DrawSun(float cx, float cy, float r, const D2D1_COLOR_F& c) {
     }
 }
 
-// Win11 风格开关
+static void DrawChevron(float cx, float cy, bool up, const D2D1_COLOR_F& c) {
+    g_brush->SetColor(c);
+    float w = 5.f, h = 3.f;
+    if (up) {
+        g_dc->DrawLine(D2D1_POINT_2F{cx - w, cy + h}, D2D1_POINT_2F{cx, cy - h}, g_brush, 1.3f, g_roundStroke);
+        g_dc->DrawLine(D2D1_POINT_2F{cx, cy - h}, D2D1_POINT_2F{cx + w, cy + h}, g_brush, 1.3f, g_roundStroke);
+    } else {
+        g_dc->DrawLine(D2D1_POINT_2F{cx - w, cy - h}, D2D1_POINT_2F{cx, cy + h}, g_brush, 1.3f, g_roundStroke);
+        g_dc->DrawLine(D2D1_POINT_2F{cx, cy + h}, D2D1_POINT_2F{cx + w, cy - h}, g_brush, 1.3f, g_roundStroke);
+    }
+}
+
 static void DrawToggle(const D2D1_RECT_F& r, bool on, bool hover) {
     float h = r.bottom - r.top;
-    float w = r.right - r.left;
     D2D1_COLOR_F track = on ? (hover ? Lighten(g_accent, 0.12f) : g_accent) : WithAlpha(kThumb, hover ? 0.20f : 0.13f);
     FillRound(r, h * 0.5f, track);
     float knob = h - 6.f;
     float cx = on ? (r.right - 3.f - knob * 0.5f) : (r.left + 3.f + knob * 0.5f);
-    D2D1_ELLIPSE e = {D2D1_POINT_2F{cx, (r.top + r.bottom) * 0.5f}, knob * 0.5f, knob * 0.5f};
     g_brush->SetColor(on ? D2D1_COLOR_F{1.f, 1.f, 1.f, 1.f} : D2D1_COLOR_F{1.f, 1.f, 1.f, 0.85f});
-    g_dc->FillEllipse(&e, g_brush);
-}
-
-static void DrawChip(const D2D1_RECT_F& r, const wchar_t* text, bool warn) {
-    FillRound(r, 6.f, {1.f, 1.f, 1.f, 0.06f});
-    TextIn(text, g_tfTiny, r, warn ? D2D1_COLOR_F{1.f, 0.55f, 0.45f, 0.95f} : kTextDim);
+    g_dc->FillEllipse(D2D1_ELLIPSE{D2D1_POINT_2F{cx, (r.top + r.bottom) * 0.5f}, knob * 0.5f, knob * 0.5f}, g_brush);
 }
 
 static void DrawRow(const RowBox& rb, const CtDisplay& d) {
@@ -567,16 +683,14 @@ static void DrawRow(const RowBox& rb, const CtDisplay& d) {
     t = Clamp01(t);
     float tx = x1 + t * (x2 - x1);
 
-    D2D1_RECT_F track = {x1, cy - 2.f, x2, cy + 2.f};
-    FillRound(track, 2.f, kTrack);
+    FillRound({x1, cy - 2.f, x2, cy + 2.f}, 2.f, kTrack);
     if (tx > x1 + 0.5f) FillRound({x1, cy - 2.f, tx, cy + 2.f}, 2.f, g_accent);
 
     float tr = 7.f;
     if (g_dragRow == rb.index) tr = 8.5f;
     else if (hover && g_hoverSlider) tr = 8.f;
-    D2D1_ELLIPSE thumb = {D2D1_POINT_2F{tx, cy}, tr, tr};
     g_brush->SetColor(kThumb);
-    g_dc->FillEllipse(&thumb, g_brush);
+    g_dc->FillEllipse(D2D1_ELLIPSE{D2D1_POINT_2F{tx, cy}, tr, tr}, g_brush);
 }
 
 static void DrawFooter() {
@@ -591,71 +705,71 @@ static void DrawFooter() {
         hint = L"设置会自动保存";
     } else if (list.empty() || !anyCtl) {
         hint = L"读不到亮度，按 F5 重新扫描";
-    } else if (!g_set.hotkeys) {
-        hint = L"快捷键已关闭";
     } else {
-        hint = L"滚轮调节  ·  Ctrl+Alt+↑↓ 全局";
+        hint = L"滚轮调节  ·  快捷键可在设置里改";
     }
     TextIn(hint.c_str(), g_tfSmall, {20.f, top + 6.f, kWidth - 80.f, top + 28.f}, kTextFaint);
 
-    // 右下角按钮：主界面是设置入口，设置页是返回
     D2D1_RECT_F btn = {kWidth - 68.f, top + 3.f, kWidth - 12.f, top + 31.f};
-    bool hover = (g_hoverCtl == 8);
+    bool hover = (g_hoverCtl == 20);
     if (hover) FillRound(btn, 6.f, {1.f, 1.f, 1.f, 0.07f});
     if (g_settingsView) {
         TextIn(L"返回", g_tfSmall, btn, hover ? kText : kTextDim);
     } else {
-        // 三条滑杆的小图标
         float cx = (btn.left + btn.right) * 0.5f;
         float cy = (btn.top + btn.bottom) * 0.5f;
         g_brush->SetColor(hover ? kText : kTextDim);
-        for (int i = 0; i < 3; ++i) {
-            float y = cy - 6.f + i * 6.f;
-            g_dc->DrawLine(D2D1_POINT_2F{cx - 7.f, y}, D2D1_POINT_2F{cx + 7.f, y}, g_brush, 1.2f, g_roundStroke);
-        }
-        g_brush->SetColor(hover ? kText : kTextDim);
+        for (int i = 0; i < 3; ++i)
+            g_dc->DrawLine(D2D1_POINT_2F{cx - 7.f, cy - 6.f + i * 6.f}, D2D1_POINT_2F{cx + 7.f, cy - 6.f + i * 6.f},
+                           g_brush, 1.2f, g_roundStroke);
         g_dc->FillEllipse(D2D1_ELLIPSE{D2D1_POINT_2F{cx - 3.f, cy - 6.f}, 2.2f, 2.2f}, g_brush);
         g_dc->FillEllipse(D2D1_ELLIPSE{D2D1_POINT_2F{cx + 4.f, cy}, 2.2f, 2.2f}, g_brush);
         g_dc->FillEllipse(D2D1_ELLIPSE{D2D1_POINT_2F{cx - 1.f, cy + 6.f}, 2.2f, 2.2f}, g_brush);
     }
 }
 
-static void DrawSettings() {
-    CfgLayout L = LayoutSettings();
-    D2D1_RECT_F card = {kPad, kCardTop, kWidth - kPad, kCardTop + kCardH};
-    FillRound(card, 10.f, kRowBg);
-    StrokeRound(card, 10.f, kRowBorder, 1.f);
+static void DrawCfg() {
+    CfgLayout L = LayoutCfg();
+    FillRound({kPad, kCardTop, kWidth - kPad, kCardTop + kCardH}, 10.f, kRowBg);
+    StrokeRound({kPad, kCardTop, kWidth - kPad, kCardTop + kCardH}, 10.f, kRowBorder, 1.f);
 
-    TextIn(L"启用全局快捷键", g_tfName, {26.f, 22.f, 300.f, 46.f}, kText);
-    DrawToggle(L.hkToggle, g_set.hotkeys, g_hoverCtl == 0);
+    TextIn(L"快捷键", g_tfSmall, {26.f, 20.f, 200.f, 40.f}, kTextDim);
 
-    D2D1_COLOR_F lab = g_set.hotkeys ? kText : kTextFaint;
-    TextIn(L"提高亮度", g_tfName, {26.f, 50.f, 240.f, 74.f}, lab);
-    TextIn(L"降低亮度", g_tfName, {26.f, 82.f, 240.f, 106.f}, lab);
-    TextIn(L"亮度调节条", g_tfName, {26.f, 114.f, 240.f, 138.f}, lab);
-    DrawChip(L.chips[0], L"Ctrl + Alt + ↑", g_set.hotkeys && !g_hkOk[0]);
-    DrawChip(L.chips[1], L"Ctrl + Alt + ↓", g_set.hotkeys && !g_hkOk[1]);
-    DrawChip(L.chips[2], L"Ctrl + Alt + B", g_set.hotkeys && !g_hkOk[2]);
+    float ys[3] = {44.f, 78.f, 112.f};
+    for (int i = 0; i < 3; ++i) {
+        TextIn(kHkNames[i], g_tfName, {26.f, ys[i], 150.f, ys[i] + 30.f}, kText);
+        // 快捷键按钮
+        bool capturing = (g_captureHk == i);
+        bool chipHover = (g_hoverCtl == 30 + i);
+        D2D1_COLOR_F chipBg = capturing ? WithAlpha(g_accent, 0.20f)
+                                        : (chipHover ? D2D1_COLOR_F{1.f, 1.f, 1.f, 0.10f} : D2D1_COLOR_F{1.f, 1.f, 1.f, 0.05f});
+        FillRound(L.hkChip[i], 6.f, chipBg);
+        if (capturing) StrokeRound(L.hkChip[i], 6.f, WithAlpha(g_accent, 0.8f), 1.f);
+        std::wstring txt = capturing ? L"按下新的快捷键…" : ComboText(g_set.hk[i]);
+        D2D1_COLOR_F tc = capturing ? kText : (g_set.hk[i].enabled ? kTextDim : kTextFaint);
+        if (!capturing && g_set.hk[i].enabled && !g_set.hk[i].ok) tc = {1.f, 0.55f, 0.45f, 0.95f};
+        TextIn(txt.c_str(), g_tfTiny, L.hkChip[i], tc);
+        DrawToggle(L.hkToggle[i], g_set.hk[i].enabled, g_hoverCtl == (int)i);
+    }
 
     g_brush->SetColor({1.f, 1.f, 1.f, 0.07f});
-    g_dc->DrawLine(D2D1_POINT_2F{26.f, 146.f}, D2D1_POINT_2F{378.f, 146.f}, g_brush, 1.f);
+    g_dc->DrawLine(D2D1_POINT_2F{26.f, 150.f}, D2D1_POINT_2F{378.f, 150.f}, g_brush, 1.f);
 
-    TextIn(L"开机自启", g_tfName, {26.f, 150.f, 300.f, 174.f}, kText);
-    DrawToggle(L.autoToggle, g_set.autostart, g_hoverCtl == 1);
+    TextIn(L"开机自启", g_tfName, {26.f, 156.f, 200.f, 180.f}, kText);
+    DrawToggle(L.autoToggle, g_set.autostart, g_hoverCtl == 3);
 
     g_brush->SetColor({1.f, 1.f, 1.f, 0.07f});
-    g_dc->DrawLine(D2D1_POINT_2F{26.f, 182.f}, D2D1_POINT_2F{378.f, 182.f}, g_brush, 1.f);
+    g_dc->DrawLine(D2D1_POINT_2F{26.f, 188.f}, D2D1_POINT_2F{378.f, 188.f}, g_brush, 1.f);
 
-    TextIn(L"调节条出现位置", g_tfSmall, {26.f, 186.f, 300.f, 208.f}, kTextDim);
+    TextIn(L"调节条出现位置", g_tfSmall, {26.f, 194.f, 300.f, 214.f}, kTextDim);
     for (int i = 0; i < 6; ++i) {
         bool sel = (g_set.osdPos == i);
-        bool hover = (g_hoverCtl == 2 + i);
+        bool hover = (g_hoverCtl == 10 + i);
         D2D1_COLOR_F bg = sel ? WithAlpha(g_accent, 0.28f) : (hover ? D2D1_COLOR_F{1.f, 1.f, 1.f, 0.09f}
                                                                    : D2D1_COLOR_F{1.f, 1.f, 1.f, 0.05f});
         FillRound(L.pos[i], 8.f, bg);
         if (sel) StrokeRound(L.pos[i], 8.f, WithAlpha(g_accent, 0.75f), 1.f);
-        TextIn(kPosNames[i], g_tfTiny,
-               {L.pos[i].left, L.pos[i].top, L.pos[i].right, L.pos[i].bottom}, sel ? kText : kTextDim);
+        TextIn(kPosNames[i], g_tfTiny, L.pos[i], sel ? kText : kTextDim);
     }
 }
 
@@ -670,7 +784,7 @@ static void RenderMain() {
     }
 
     if (g_settingsView) {
-        DrawSettings();
+        DrawCfg();
     } else {
         const auto& list = BrightList();
         if (list.empty()) {
@@ -697,26 +811,50 @@ static void RenderOsd() {
     D2D1_COLOR_F clear = {0.f, 0.f, 0.f, 0.f};
     g_dc->Clear(&clear);
 
-    float w = kOsdW, h = kOsdH;
-    FillRound({0.f, 0.f, w, h}, 14.f, kPanel);
-    StrokeRound({0.5f, 0.5f, w - 0.5f, h - 0.5f}, 14.f, {1.f, 1.f, 1.f, 0.09f}, 1.f);
+    float w = kOsdW;
+    float totalH = OsdHeight();
+    FillRound({0.f, 0.f, w, totalH}, kOsdRadius, kOsdPanel);
+    StrokeRound({0.5f, 0.5f, w - 0.5f, totalH - 0.5f}, kOsdRadius, {1.f, 1.f, 1.f, 0.07f}, 1.f);
 
-    DrawSun(26.f, h * 0.5f, 9.f, kTextDim);
+    float cy = kOsdH * 0.5f;
+    DrawSun(28.f, cy, 9.f, kText);
 
-    float x1 = OsdX1(), x2 = OsdX2(), cy = h * 0.5f;
+    float x1 = OsdX1(), x2 = OsdX2();
     float t = Clamp01(g_osdPct / 100.f);
     float tx = x1 + t * (x2 - x1);
 
-    FillRound({x1, cy - 2.5f, x2, cy + 2.5f}, 2.5f, kTrack);
+    FillRound({x1, cy - 2.5f, x2, cy + 2.5f}, 2.5f, kTrackLight);
     if (tx > x1 + 0.5f) FillRound({x1, cy - 2.5f, tx, cy + 2.5f}, 2.5f, g_accent);
 
-    float tr = g_osdDrag ? 9.f : (g_osdHover ? 8.f : 7.f);
-    g_brush->SetColor(kThumb);
-    g_dc->FillEllipse(D2D1_ELLIPSE{D2D1_POINT_2F{tx, cy}, tr, tr}, g_brush);
-
     wchar_t buf[16];
-    swprintf(buf, 16, L"%d%%", g_osdPct);
-    TextIn(buf, g_tfPct, {w - 62.f, 0.f, w - 18.f, h}, kText);
+    swprintf(buf, 16, L"%d", g_osdPct);
+    TextIn(buf, g_tfBig, {x2 + 6.f, 0.f, w - 42.f, kOsdH}, kText);
+
+    if (g_osdChevronHover) DrawChevron(kOsdW - 24.f, cy, g_osdList, kText);
+    else DrawChevron(kOsdW - 24.f, cy, g_osdList, kTextDim);
+
+    if (g_osdList) {
+        float y = kOsdH + 6.f;
+        int rows = OsdRowCount();
+        for (int i = 0; i < rows; ++i) {
+            D2D1_RECT_F row = {10.f, y, w - 10.f, y + kOsdRow};
+            int sel = OsdRowToSel(i);
+            bool isSel = (g_set.osdSel == sel);
+            if (g_osdHoverItem == i) FillRound(row, 6.f, {1.f, 1.f, 1.f, 0.07f});
+            if (isSel) FillRound(row, 6.f, WithAlpha(g_accent, 0.16f));
+            D2D1_RECT_F tr = {26.f, y, w - 50.f, y + kOsdRow};
+            TextIn(OsdRowName(i), g_tfName, tr, isSel ? kText : kTextDim);
+            if (isSel) {
+                g_brush->SetColor(g_accent);
+                float cx = w - 30.f, ccy = y + kOsdRow * 0.5f;
+                g_dc->DrawLine(D2D1_POINT_2F{cx - 5.f, ccy}, D2D1_POINT_2F{cx - 1.f, ccy + 4.f}, g_brush, 1.8f,
+                               g_roundStroke);
+                g_dc->DrawLine(D2D1_POINT_2F{cx - 1.f, ccy + 4.f}, D2D1_POINT_2F{cx + 5.f, ccy - 4.f}, g_brush, 1.8f,
+                               g_roundStroke);
+            }
+            y += kOsdRow;
+        }
+    }
 
     HRESULT hr = g_dc->EndDraw();
     if (hr == D2DERR_RECREATE_TARGET) {
@@ -775,13 +913,15 @@ static void FlushWmiPending() {
     g_lastWmiWrite = GetTickCount();
 }
 
-static void SetAllPercent(int pct) {
+// 取当前目标显示器（osdSel >= 0）或全部
+static void SetPercent(int pct) {
     if (pct < 0) pct = 0;
     if (pct > 100) pct = 100;
     DWORD now = GetTickCount();
     const auto& list = BrightList();
     for (size_t i = 0; i < list.size(); ++i) {
         if (!list[i].controllable) continue;
+        if (g_set.osdSel >= 0 && (int)i != g_set.osdSel) continue;
         int v = list[i].min + (list[i].max - list[i].min) * pct / 100;
         if (list[i].internal) {
             if (now - g_lastWmiWrite >= 180) {
@@ -798,27 +938,19 @@ static void SetAllPercent(int pct) {
     g_osdPct = pct;
 }
 
-static int FirstPercent() {
+static int TargetPercent() {
     const auto& list = BrightList();
+    if (g_set.osdSel >= 0 && g_set.osdSel < (int)list.size() && list[g_set.osdSel].controllable)
+        return BrightPercent(g_set.osdSel);
     for (size_t i = 0; i < list.size(); ++i)
         if (list[i].controllable) return BrightPercent((int)i);
     return 0;
 }
 
-static void AdjustAll(int delta) {
-    const auto& list = BrightList();
-    int shown = 0;
-    for (size_t i = 0; i < list.size(); ++i) {
-        if (!list[i].controllable) continue;
-        int pct = BrightPercent((int)i) + delta;
-        if (pct < 0) pct = 0;
-        if (pct > 100) pct = 100;
-        BrightSet((int)i, list[i].min + (list[i].max - list[i].min) * pct / 100);
-        shown = pct;
-    }
-    g_osdPct = shown;
+static void AdjustBy(int delta) {
+    SetPercent(TargetPercent() + delta);
     if (g_trayAdded) {
-        swprintf(g_nid.szTip, 128, L"亮度 %d%%", shown);
+        swprintf(g_nid.szTip, 128, L"亮度 %d%%", g_osdPct);
         Shell_NotifyIconW(NIM_MODIFY, &g_nid);
     }
     InvalidateRect(g_hwnd, nullptr, FALSE);
@@ -843,7 +975,8 @@ static void PlaceOsd() {
     g_osdScale = (float)dx / 96.f;
 
     int w = (int)lroundf(kOsdW * g_osdScale);
-    int h = (int)lroundf(kOsdH * g_osdScale);
+    int h = (int)lroundf(OsdHeight() * g_osdScale);
+    int hm2 = (int)lroundf(kOsdH * g_osdScale);
     int m = (int)lroundf(24.f * g_osdScale);
     RECT wa = mi.rcWork;
     int x = wa.left + m, y = wa.top + m;
@@ -855,18 +988,19 @@ static void PlaceOsd() {
         case 4: x = (wa.left + wa.right - w) / 2; y = wa.bottom - h - m; break;
         default: x = wa.right - w - m; y = wa.bottom - h - m; break;
     }
+    (void)hm2;
     g_sOsd.scale = g_osdScale;
     SetWindowPos(g_osd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
     InvalidateRect(g_osd, nullptr, FALSE);
 }
 
 static void ShowOsd() {
-    int pct = FirstPercent();
-    if (!g_osdDrag) g_osdPct = pct;
-    // 先在旧的 DPI 下按窗口尺寸放一次，DPICHANGED 会再校正
-    g_osdScale = g_scale;
+    const auto& list = BrightList();
+    if (g_set.osdSel >= (int)list.size()) g_set.osdSel = -1;
+    g_osdPct = TargetPercent();
+    g_osdList = false;
     PlaceOsd();
-    SetTimer(g_osd, TIMER_OSD, 2400, nullptr);
+    SetTimer(g_osd, TIMER_OSD, 2600, nullptr);
 }
 
 static void HideOsd() {
@@ -875,21 +1009,24 @@ static void HideOsd() {
     KillTimer(g_osd, TIMER_OSD);
     ShowWindow(g_osd, SW_HIDE);
     g_osdDrag = false;
-    g_osdHover = false;
+    g_osdList = false;
+    g_osdHoverItem = -1;
+    g_osdChevronHover = false;
 }
 
 // ---------------------------------------------------------------------------
 // 快捷键
 // ---------------------------------------------------------------------------
 static void ApplyHotkeys() {
-    UnregisterHotKey(g_hwnd, HK_UP);
-    UnregisterHotKey(g_hwnd, HK_DOWN);
-    UnregisterHotKey(g_hwnd, HK_OSD);
-    g_hkOk[0] = g_hkOk[1] = g_hkOk[2] = false;
-    if (!g_set.hotkeys) return;
-    g_hkOk[0] = RegisterHotKey(g_hwnd, HK_UP, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_UP) != FALSE;
-    g_hkOk[1] = RegisterHotKey(g_hwnd, HK_DOWN, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, VK_DOWN) != FALSE;
-    g_hkOk[2] = RegisterHotKey(g_hwnd, HK_OSD, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'B') != FALSE;
+    for (UINT i = 0; i < HK_COUNT; ++i) {
+        UnregisterHotKey(g_hwnd, HK_ID_BASE + i);
+        g_set.hk[i].ok = false;
+    }
+    if (g_captureHk >= 0) return;   // 录入时不占用
+    for (UINT i = 0; i < HK_COUNT; ++i) {
+        if (!g_set.hk[i].enabled || g_set.hk[i].vk == 0) continue;
+        g_set.hk[i].ok = RegisterHotKey(g_hwnd, HK_ID_BASE + i, g_set.hk[i].mods | MOD_NOREPEAT, g_set.hk[i].vk) != FALSE;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -920,6 +1057,8 @@ static void RemoveTray() {
 
 static void ShowSettings(bool on) {
     g_settingsView = on;
+    g_captureHk = -1;
+    ApplyHotkeys();
     UpdateWindowSize();
     InvalidateRect(g_hwnd, nullptr, FALSE);
 }
@@ -944,8 +1083,8 @@ static void ShowTrayMenu() {
             SetForegroundWindow(g_hwnd);
             break;
         case 2: ShowOsd(); break;
-        case 3: AdjustAll(5); break;
-        case 4: AdjustAll(-5); break;
+        case 3: AdjustBy(5); break;
+        case 4: AdjustBy(-5); break;
         case 5: PostMessageW(g_hwnd, WM_CLOSE, 0, 0); break;
         default: break;
     }
@@ -963,46 +1102,50 @@ static void OnMainMouseMove(int x, int y, bool leave) {
 
     float dx = (float)x / g_scale;
     float dy = (float)y / g_scale;
+    int ctl = -1;
 
-    if (g_settingsView) {
-        CfgLayout L = LayoutSettings();
-        int ctl = -1;
-        auto in = [&](const D2D1_RECT_F& r) {
-            return dx >= r.left && dx <= r.right && dy >= r.top && dy <= r.bottom;
-        };
-        if (in(L.hkToggle)) ctl = 0;
-        else if (in(L.autoToggle)) ctl = 1;
-        else if (in(L.footerBtn)) ctl = 8;
-        else
-            for (int i = 0; i < 6; ++i)
-                if (in(L.pos[i])) { ctl = 2 + i; break; }
-        if (leave) ctl = -1;
-        if (ctl != g_hoverCtl) {
-            g_hoverCtl = ctl;
-            InvalidateRect(g_hwnd, nullptr, FALSE);
-        }
-    } else {
-        int hitRow = -1;
-        bool overSlider = false;
-        if (!leave) {
-            for (const auto& rb : g_rows) {
-                if (dy >= rb.top && dy <= rb.top + kRowH) {
-                    hitRow = rb.index;
-                    overSlider = (dy >= rb.top + 37.f && dy <= rb.top + 69.f);
-                    break;
-                }
+    auto in = [&](const D2D1_RECT_F& r) {
+        return dx >= r.left && dx <= r.right && dy >= r.top && dy <= r.bottom;
+    };
+
+    if (!leave) {
+        if (g_settingsView) {
+            CfgLayout L = LayoutCfg();
+            if (in(L.footerBtn)) ctl = 20;
+            else if (in(L.autoToggle)) ctl = 3;
+            else {
+                for (int i = 0; i < 3; ++i)
+                    if (in(L.hkToggle[i])) { ctl = i; break; }
+                if (ctl < 0)
+                    for (int i = 0; i < 3; ++i)
+                        if (in(L.hkChip[i])) { ctl = 30 + i; break; }
+                if (ctl < 0)
+                    for (int i = 0; i < 6; ++i)
+                        if (in(L.pos[i])) { ctl = 10 + i; break; }
             }
-            if (dy >= g_clientH - kFooterH) g_hoverCtl = (dx >= kWidth - 68.f) ? 8 : -1;
-            else g_hoverCtl = -1;
+        } else {
+            D2D1_RECT_F btn = {kWidth - 68.f, g_clientH - kFooterH + 3.f, kWidth - 12.f, g_clientH - 3.f};
+            if (in(btn)) ctl = 20;
         }
-        if (hitRow != g_hoverRow || overSlider != g_hoverSlider) {
-            g_hoverRow = hitRow;
-            g_hoverSlider = overSlider;
-            InvalidateRect(g_hwnd, nullptr, FALSE);
-        } else if (leave) {
-            g_hoverCtl = -1;
-            InvalidateRect(g_hwnd, nullptr, FALSE);
+    }
+
+    int hitRow = -1;
+    bool overSlider = false;
+    if (!leave && !g_settingsView) {
+        for (const auto& rb : g_rows) {
+            if (dy >= rb.top && dy <= rb.top + kRowH) {
+                hitRow = rb.index;
+                overSlider = (dy >= rb.top + 37.f && dy <= rb.top + 69.f);
+                break;
+            }
         }
+    }
+
+    if (ctl != g_hoverCtl || hitRow != g_hoverRow || overSlider != g_hoverSlider) {
+        g_hoverCtl = ctl;
+        g_hoverRow = hitRow;
+        g_hoverSlider = overSlider;
+        InvalidateRect(g_hwnd, nullptr, FALSE);
     }
 
     if (!leave && !g_trackingLeave) {
@@ -1015,25 +1158,34 @@ static void OnMainMouseMove(int x, int y, bool leave) {
 static void OnMainClick(int x, int y) {
     float dx = (float)x / g_scale;
     float dy = (float)y / g_scale;
-    CfgLayout L = LayoutSettings();
+    CfgLayout L = LayoutCfg();
     auto in = [&](const D2D1_RECT_F& r) {
         return dx >= r.left && dx <= r.right && dy >= r.top && dy <= r.bottom;
     };
 
-    // 底部按钮
-    D2D1_RECT_F footerBtn = {kWidth - 68.f, g_clientH - kFooterH + 3.f, kWidth - 12.f, g_clientH - 3.f};
-    if (in(footerBtn)) {
+    if (in(L.footerBtn)) {
         ShowSettings(!g_settingsView);
         return;
     }
 
     if (g_settingsView) {
-        if (in(L.hkToggle)) {
-            g_set.hotkeys = !g_set.hotkeys;
-            SaveSettings();
-            ApplyHotkeys();
-            InvalidateRect(g_hwnd, nullptr, FALSE);
-            return;
+        for (int i = 0; i < 3; ++i) {
+            if (in(L.hkToggle[i])) {
+                g_set.hk[i].enabled = !g_set.hk[i].enabled;
+                SaveSettings();
+                ApplyHotkeys();
+                InvalidateRect(g_hwnd, nullptr, FALSE);
+                return;
+            }
+        }
+        for (int i = 0; i < 3; ++i) {
+            if (in(L.hkChip[i])) {
+                g_captureHk = (g_captureHk == i) ? -1 : i;
+                ApplyHotkeys();
+                SetFocus(g_hwnd);
+                InvalidateRect(g_hwnd, nullptr, FALSE);
+                return;
+            }
         }
         if (in(L.autoToggle)) {
             g_set.autostart = !g_set.autostart;
@@ -1078,6 +1230,25 @@ static void ApplyBackdrop(HWND hwnd, bool* micaFlag) {
     if (micaFlag) *micaFlag = ok;
 }
 
+static int OsdItemAt(float y) {
+    if (!g_osdList) return -1;
+    float top = kOsdH + 6.f;
+    if (y < top) return -1;
+    int idx = (int)((y - top) / kOsdRow);
+    if (idx < 0 || idx >= OsdRowCount()) return -1;
+    return idx;
+}
+
+static void OsdSelect(int row) {
+    g_set.osdSel = OsdRowToSel(row);
+    SaveSettings();
+    g_osdList = false;
+    g_osdPct = TargetPercent();
+    PlaceOsd();
+    SetTimer(g_osd, TIMER_OSD, 1800, nullptr);
+    InvalidateRect(g_osd, nullptr, FALSE);
+}
+
 static LRESULT CALLBACK OsdProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_MOUSEACTIVATE:
@@ -1100,48 +1271,75 @@ static LRESULT CALLBACK OsdProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g_osdScale = (float)HIWORD(wp) / 96.f;
             g_sOsd.scale = g_osdScale;
             RECT* r = (RECT*)lp;
-            SetWindowPos(hwnd, HWND_TOPMOST, r->left, r->top, r->right - r->left, r->bottom - r->top,
-                         SWP_NOACTIVATE);
+            SetWindowPos(hwnd, HWND_TOPMOST, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOACTIVATE);
             return 0;
         }
 
         case WM_MOUSEMOVE: {
+            float x = (float)GET_X_LPARAM(lp) / g_osdScale;
+            float y = (float)GET_Y_LPARAM(lp) / g_osdScale;
+
             if (g_osdDrag) {
-                float x = (float)GET_X_LPARAM(lp) / g_osdScale;
                 float t = Clamp01((x - OsdX1()) / (OsdX2() - OsdX1()));
                 int pct = (int)lroundf(t * 100.f);
                 if (GetTickCount() - g_osdLastWrite >= 30) {
-                    SetAllPercent(pct);
+                    SetPercent(pct);
                     g_osdLastWrite = GetTickCount();
                 } else {
                     g_osdPct = pct;
                 }
-                SetTimer(hwnd, TIMER_OSD, 2400, nullptr);
+                SetTimer(hwnd, TIMER_OSD, 2600, nullptr);
                 InvalidateRect(hwnd, nullptr, FALSE);
-            } else if (!g_osdHover) {
-                g_osdHover = true;
+                return 0;
+            }
+
+            bool chevHover = (x >= kOsdW - 44.f && x <= kOsdW - 6.f && y <= kOsdH);
+            int item = OsdItemAt(y);
+            if (chevHover != g_osdChevronHover || item != g_osdHoverItem) {
+                g_osdChevronHover = chevHover;
+                g_osdHoverItem = item;
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
-            if (GetCapture() != hwnd) {
-                TRACKMOUSEEVENT tme = {sizeof(tme), TME_LEAVE, hwnd, 0};
-                TrackMouseEvent(&tme);
-            }
+            SetTimer(hwnd, TIMER_OSD, 2600, nullptr);
+            TRACKMOUSEEVENT tme = {sizeof(tme), TME_LEAVE, hwnd, 0};
+            TrackMouseEvent(&tme);
             return 0;
         }
 
         case WM_MOUSELEAVE:
-            g_osdHover = false;
-            InvalidateRect(hwnd, nullptr, FALSE);
+            if (!g_osdDrag) {
+                g_osdChevronHover = false;
+                g_osdHoverItem = -1;
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
             return 0;
 
         case WM_LBUTTONDOWN: {
+            float x = (float)GET_X_LPARAM(lp) / g_osdScale;
+            float y = (float)GET_Y_LPARAM(lp) / g_osdScale;
+
+            if (y > kOsdH) {
+                int item = OsdItemAt(y);
+                if (item >= 0) OsdSelect(item);
+                return 0;
+            }
+            if (x >= kOsdW - 44.f && x <= kOsdW - 6.f) {
+                g_osdList = !g_osdList;
+                if (g_osdList) {
+                    // 展开时补一条“全部显示器”，放在最前
+                    g_osdHoverItem = -1;
+                }
+                PlaceOsd();
+                SetTimer(hwnd, TIMER_OSD, 5200, nullptr);
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return 0;
+            }
             g_osdDrag = true;
             SetCapture(hwnd);
-            float x = (float)GET_X_LPARAM(lp) / g_osdScale;
             float t = Clamp01((x - OsdX1()) / (OsdX2() - OsdX1()));
-            SetAllPercent((int)lroundf(t * 100.f));
+            SetPercent((int)lroundf(t * 100.f));
             g_osdLastWrite = GetTickCount();
-            SetTimer(hwnd, TIMER_OSD, 2400, nullptr);
+            SetTimer(hwnd, TIMER_OSD, 2600, nullptr);
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         }
@@ -1150,19 +1348,22 @@ static LRESULT CALLBACK OsdProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (g_osdDrag) {
                 float x = (float)GET_X_LPARAM(lp) / g_osdScale;
                 float t = Clamp01((x - OsdX1()) / (OsdX2() - OsdX1()));
-                SetAllPercent((int)lroundf(t * 100.f));
+                SetPercent((int)lroundf(t * 100.f));
                 FlushWmiPending();
                 g_osdDrag = false;
                 ReleaseCapture();
-                SetTimer(hwnd, TIMER_OSD, 1600, nullptr);
+                SetTimer(hwnd, TIMER_OSD, 1800, nullptr);
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
             return 0;
 
         case WM_MOUSEWHEEL:
-            SetAllPercent(g_osdPct + (GET_WHEEL_DELTA_WPARAM(wp) > 0 ? 5 : -5));
-            SetTimer(hwnd, TIMER_OSD, 1600, nullptr);
-            InvalidateRect(hwnd, nullptr, FALSE);
+            if (!g_osdDrag) {
+                int d = GET_WHEEL_DELTA_WPARAM(wp) > 0 ? 5 : -5;
+                SetPercent(g_osdPct + d);
+                SetTimer(hwnd, TIMER_OSD, 1800, nullptr);
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
             return 0;
 
         case WM_KEYDOWN:
@@ -1178,6 +1379,35 @@ static LRESULT CALLBACK OsdProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             break;
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+static bool HandleCapture(UINT vk) {
+    if (g_captureHk < 0) return false;
+    if (vk == VK_ESCAPE) {
+        g_captureHk = -1;
+        ApplyHotkeys();
+        InvalidateRect(g_hwnd, nullptr, FALSE);
+        return true;
+    }
+    if (vk == VK_CONTROL || vk == VK_SHIFT || vk == VK_MENU || vk == VK_LWIN || vk == VK_RWIN || vk == VK_APPS)
+        return true;   // 等真正的键，吞掉
+
+    UINT mods = 0;
+    if (GetKeyState(VK_CONTROL) & 0x8000) mods |= MOD_CONTROL;
+    if (GetKeyState(VK_SHIFT) & 0x8000) mods |= MOD_SHIFT;
+    if (GetKeyState(VK_MENU) & 0x8000) mods |= MOD_ALT;
+    if ((GetKeyState(VK_LWIN) & 0x8000) || (GetKeyState(VK_RWIN) & 0x8000)) mods |= MOD_WIN;
+    if (mods == 0) return true;   // 必须带修饰键
+
+    int i = g_captureHk;
+    g_set.hk[i].mods = mods;
+    g_set.hk[i].vk = vk;
+    g_set.hk[i].enabled = true;
+    g_captureHk = -1;
+    SaveSettings();
+    ApplyHotkeys();
+    InvalidateRect(g_hwnd, nullptr, FALSE);
+    return true;
 }
 
 static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -1222,6 +1452,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
 
         case WM_LBUTTONDOWN:
+            SetFocus(hwnd);
             OnMainClick(GET_X_LPARAM(lp), GET_Y_LPARAM(lp));
             return 0;
 
@@ -1255,7 +1486,9 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
 
+        case WM_SYSKEYDOWN:
         case WM_KEYDOWN:
+            if (HandleCapture((UINT)wp)) return 0;
             if (wp == VK_ESCAPE) {
                 if (g_settingsView) ShowSettings(false);
                 else ShowWindow(hwnd, SW_HIDE);
@@ -1297,11 +1530,13 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             break;
 
-        case WM_HOTKEY:
-            if (wp == HK_UP) AdjustAll(5);
-            else if (wp == HK_DOWN) AdjustAll(-5);
-            else if (wp == HK_OSD) ShowOsd();
+        case WM_HOTKEY: {
+            UINT id = (UINT)wp - HK_ID_BASE;
+            if (id == 0) AdjustBy(5);
+            else if (id == 1) AdjustBy(-5);
+            else if (id == 2) ShowOsd();
             return 0;
+        }
 
         case WM_TRAY:
             if (LOWORD(lp) == WM_LBUTTONUP) {
@@ -1328,9 +1563,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_DESTROY:
             KillTimer(hwnd, TIMER_POLL);
             KillTimer(hwnd, TIMER_FLUSH);
-            UnregisterHotKey(hwnd, HK_UP);
-            UnregisterHotKey(hwnd, HK_DOWN);
-            UnregisterHotKey(hwnd, HK_OSD);
+            for (UINT i = 0; i < HK_COUNT; ++i) UnregisterHotKey(hwnd, HK_ID_BASE + i);
             RemoveTray();
             BrightShutdown();
             if (g_ellipsis) g_ellipsis->Release();
@@ -1338,6 +1571,7 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (g_tfPct) g_tfPct->Release();
             if (g_tfSmall) g_tfSmall->Release();
             if (g_tfTiny) g_tfTiny->Release();
+            if (g_tfBig) g_tfBig->Release();
             if (g_writeFactory) g_writeFactory->Release();
             ReleaseGraphics();
             PostQuitMessage(0);
