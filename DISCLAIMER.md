@@ -41,7 +41,7 @@
 ## 7. 第三方、商标与来源
 
 - 本项目为**独立实现**，未使用、未复制任何第三方开源项目的代码，不包含任何 GPL/LGPL 代码。
-- 与 **MyDockFinder** 及其他同类软件**无任何关联、无隶属关系**，不包含其任何代码、图标、字体或其它资源；仅在功能形态上作为参照。
+- 与任何第三方软件**无任何关联、无隶属关系**，不包含其任何代码、图标、字体或其它资源。
 - 「Windows」是 Microsoft Corporation 的商标；文中出现的其他软件、硬件、品牌名称归各自所有者所有。
 - 本项目与 Microsoft 及任何显示器厂商**无隶属关系，也未获其背书**。
 
@@ -61,4 +61,4 @@ This software is provided **"AS IS"**, without warranty of any kind. It writes m
 
 The software makes **no network requests**, collects **no data**, and writes **no registry keys**.
 
-This project is an independent implementation and is **not affiliated with** MyDockFinder, Microsoft, or any display manufacturer. "Windows" is a trademark of Microsoft Corporation. Licensed under the **MIT License**; redistribution only requires keeping the copyright and license notice.
+This project is an independent implementation and is **not affiliated with** any third-party software, Microsoft, or any display manufacturer. "Windows" is a trademark of Microsoft Corporation. Licensed under the **MIT License**; redistribution only requires keeping the copyright and license notice.

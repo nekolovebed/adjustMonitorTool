@@ -100,6 +100,6 @@ tools/rangeprobe.cpp DDC 读数诊断（排查某台显示器能不能调）
 本项目使用 [MIT License](LICENSE)。你可以自由使用、修改、再分发，**只需保留版权声明与本许可声明**（即「注明来源」）。
 
 - 本项目为**独立实现**，未使用、未复制任何第三方开源项目的代码。
-- 与 MyDockFinder 等同类软件**无任何关联**，不包含其任何代码、图标或资源；仅在功能形态上作为参照。
+- 与任何第三方软件**无任何关联、无隶属关系**，不包含其任何代码、图标或资源。
 - 全部功能基于 Windows 公开 API（`dxva2.dll`、WMI、Direct2D、DirectComposition、DWM）。
 - 「Windows」是 Microsoft Corporation 的商标；文中提及的其他软件与硬件名称归各自所有者所有。本项目与 Microsoft 及各显示器厂商无隶属关系，也未获其背书。
