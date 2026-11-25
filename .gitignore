@@ -1,0 +1,13 @@
+# 构建产物
+dist/
+src/app.ico
+src/app.res
+tools/*.exe
+
+# 中间文件
+*.o
+*.obj
+*.bmp
+
+# 本地工具与笔记
+.workbuddy/
